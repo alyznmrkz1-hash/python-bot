@@ -65,7 +65,10 @@ def default_data():
         ],
         "contact_text": "سيتم إضافة وسيلة التواصل قريبًا.",
         "about_text": "بوم متجر متخصص في أدوات بايثون والخدمات الرقمية.",
-        "services": []
+        "services": [],
+        "admins": [ADMIN_ID],
+        "users": [],
+        "blocked_users": []
     }
 
 
@@ -100,6 +103,23 @@ def load_data():
 def save_data(data):
     with open(DATA_FILE, "w", encoding="utf-8") as file:
         json.dump(data, file, ensure_ascii=False, indent=2)
+
+
+
+def is_admin(user_id):
+    return user_id in load_data().get("admins", [ADMIN_ID])
+
+
+def is_owner(user_id):
+    return user_id == ADMIN_ID
+
+
+def register_user(user_id):
+    data = load_data()
+    users = data.setdefault("users", [])
+    if user_id not in users:
+        users.append(user_id)
+        save_data(data)
 
 
 def make_button(text, callback_data, style=None):
@@ -192,11 +212,20 @@ def admin_main_keyboard():
 
     kb.row(
         make_button("🛍 إدارة الخدمات", "admin_services", "success"),
-        make_button("👁 معاينة المتجر", "user_home", "primary")
+        make_button("👥 إدارة الأدمنات", "admin_manage_admins", "danger")
     )
 
     kb.row(
-        make_button("📦 تصدير الإعدادات", "admin_export", "primary"),
+        make_button("📢 إرسال جماعي", "admin_broadcast", "primary"),
+        make_button("📊 الإحصائيات", "admin_stats", "primary")
+    )
+
+    kb.row(
+        make_button("👁 معاينة المتجر", "user_home", "success"),
+        make_button("📦 تصدير الإعدادات", "admin_export", "primary")
+    )
+
+    kb.row(
         make_button("❌ إغلاق", "admin_close", "danger")
     )
 
@@ -332,8 +361,32 @@ def user_services_keyboard():
     return kb
 
 
+
+def admins_keyboard():
+    data = load_data()
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    kb.add(make_button("➕ إضافة أدمن", "admin_add_admin", "success"))
+    for admin_id in data.get("admins", [ADMIN_ID]):
+        title = "👑 المالك" if admin_id == ADMIN_ID else "👤 أدمن"
+        kb.add(make_button(f"{title}: {admin_id}", f"admin_view:{admin_id}", "primary"))
+    kb.add(make_button("↩️ رجوع", "admin_panel", "danger"))
+    return kb
+
+
+def admin_details_keyboard(admin_id):
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    if admin_id != ADMIN_ID:
+        kb.add(make_button("🗑 حذف الأدمن", f"admin_remove:{admin_id}", "danger"))
+    kb.add(make_button("↩️ رجوع", "admin_manage_admins", "primary"))
+    return kb
+
+
 @bot.message_handler(commands=["start"])
 def start_command(message):
+    register_user(message.from_user.id)
+    if message.from_user.id in load_data().get("blocked_users", []):
+        bot.send_message(message.chat.id, "🚫 تم حظرك من استخدام البوت.")
+        return
     bot.send_message(
         message.chat.id,
         home_text(message.from_user.first_name or "عزيزي"),
@@ -343,7 +396,7 @@ def start_command(message):
 
 @bot.message_handler(commands=["admin"])
 def admin_command(message):
-    if message.from_user.id != ADMIN_ID:
+    if not is_admin(message.from_user.id):
         bot.reply_to(message, "⛔ هذا الأمر خاص بالإدارة.")
         return
 
@@ -420,14 +473,17 @@ def callback_handler(call):
             else "لا يوجد"
         )
 
-        bot.send_message(
-            ADMIN_ID,
+        for admin_id in load_data().get("admins", [ADMIN_ID]):
+            try:
+                bot.send_message(admin_id,
             f"<b>🆕 طلب جديد</b>\n\n"
             f"🛍 الخدمة: <b>{services[index].get('name', 'خدمة')}</b>\n"
             f"👤 العميل: {call.from_user.first_name}\n"
             f"🔗 المستخدم: {username}\n"
             f"🆔 ID: <code>{call.from_user.id}</code>"
-        )
+                )
+            except Exception:
+                pass
 
         bot.answer_callback_query(
             call.id,
@@ -461,7 +517,7 @@ def callback_handler(call):
         return
 
     # حماية الإدارة
-    if call.from_user.id != ADMIN_ID:
+    if not is_admin(call.from_user.id):
         bot.answer_callback_query(call.id, "⛔ غير مسموح لك.", show_alert=True)
         return
 
@@ -519,7 +575,7 @@ def callback_handler(call):
 
     if action.startswith("btn_rename:"):
         key = action.split(":")[1]
-        admin_state[ADMIN_ID] = {
+        admin_state[call.from_user.id] = {
             "step": "rename_button",
             "key": key
         }
@@ -582,7 +638,7 @@ def callback_handler(call):
 
     if action.startswith("btn_order:"):
         key = action.split(":")[1]
-        admin_state[ADMIN_ID] = {
+        admin_state[call.from_user.id] = {
             "step": "button_order",
             "key": key
         }
@@ -594,25 +650,25 @@ def callback_handler(call):
         return
 
     if action == "edit_store_name":
-        admin_state[ADMIN_ID] = {"step": "store_name"}
+        admin_state[call.from_user.id] = {"step": "store_name"}
         bot.send_message(call.message.chat.id, "أرسل اسم المتجر الجديد:")
         bot.answer_callback_query(call.id)
         return
 
     if action == "edit_welcome_text":
-        admin_state[ADMIN_ID] = {"step": "welcome_text"}
+        admin_state[call.from_user.id] = {"step": "welcome_text"}
         bot.send_message(call.message.chat.id, "أرسل رسالة الترحيب الجديدة:")
         bot.answer_callback_query(call.id)
         return
 
     if action == "edit_contact_text":
-        admin_state[ADMIN_ID] = {"step": "contact_text"}
+        admin_state[call.from_user.id] = {"step": "contact_text"}
         bot.send_message(call.message.chat.id, "أرسل نص أو رابط التواصل الجديد:")
         bot.answer_callback_query(call.id)
         return
 
     if action == "edit_about_text":
-        admin_state[ADMIN_ID] = {"step": "about_text"}
+        admin_state[call.from_user.id] = {"step": "about_text"}
         bot.send_message(call.message.chat.id, "أرسل نص حول المتجر الجديد:")
         bot.answer_callback_query(call.id)
         return
@@ -627,7 +683,7 @@ def callback_handler(call):
         return
 
     if action == "service_add":
-        admin_state[ADMIN_ID] = {"step": "service_add_name"}
+        admin_state[call.from_user.id] = {"step": "service_add_name"}
         bot.send_message(
             call.message.chat.id,
             "أرسل اسم الخدمة:\n\nللإلغاء أرسل /cancel"
@@ -690,7 +746,7 @@ def callback_handler(call):
             bot.answer_callback_query(call.id, "الخدمة غير موجودة.", show_alert=True)
             return
 
-        admin_state[ADMIN_ID] = {
+        admin_state[call.from_user.id] = {
             "step": "service_edit_name",
             "index": index,
             "service": services[index].copy()
@@ -741,6 +797,64 @@ def callback_handler(call):
         bot.answer_callback_query(call.id)
         return
 
+
+    if action == "admin_manage_admins":
+        if not is_owner(call.from_user.id):
+            bot.answer_callback_query(call.id, "إدارة الأدمنات للمالك فقط.", show_alert=True)
+            return
+        edit_or_send(call, "<b>👥 إدارة الأدمنات</b>", admins_keyboard())
+        bot.answer_callback_query(call.id)
+        return
+
+    if action == "admin_add_admin":
+        if not is_owner(call.from_user.id):
+            return
+        admin_state[call.from_user.id] = {"step": "add_admin"}
+        bot.send_message(call.message.chat.id, "أرسل ID الأدمن الجديد:")
+        bot.answer_callback_query(call.id)
+        return
+
+    if action.startswith("admin_view:"):
+        target = int(action.split(":")[1])
+        edit_or_send(
+            call,
+            f"<b>👤 بيانات الأدمن</b>\n\nID: <code>{target}</code>",
+            admin_details_keyboard(target)
+        )
+        bot.answer_callback_query(call.id)
+        return
+
+    if action.startswith("admin_remove:"):
+        if not is_owner(call.from_user.id):
+            return
+        target = int(action.split(":")[1])
+        data = load_data()
+        if target != ADMIN_ID and target in data.get("admins", []):
+            data["admins"].remove(target)
+            save_data(data)
+        edit_or_send(call, "✅ تم حذف الأدمن.", admins_keyboard())
+        bot.answer_callback_query(call.id)
+        return
+
+    if action == "admin_broadcast":
+        admin_state[call.from_user.id] = {"step": "broadcast"}
+        bot.send_message(call.message.chat.id, "أرسل الرسالة الجماعية:")
+        bot.answer_callback_query(call.id)
+        return
+
+    if action == "admin_stats":
+        data = load_data()
+        edit_or_send(
+            call,
+            f"<b>📊 الإحصائيات</b>\n\n"
+            f"👥 المستخدمون: <b>{len(data.get('users', []))}</b>\n"
+            f"👑 الأدمنات: <b>{len(data.get('admins', []))}</b>\n"
+            f"🛍 الخدمات: <b>{len(data.get('services', []))}</b>",
+            admin_main_keyboard()
+        )
+        bot.answer_callback_query(call.id)
+        return
+
     if action == "admin_close":
         edit_or_send(call, "✅ تم إغلاق لوحة الإدارة.")
         bot.answer_callback_query(call.id)
@@ -749,15 +863,15 @@ def callback_handler(call):
 @bot.message_handler(
     func=lambda message: (
         message.from_user.id == ADMIN_ID
-        and ADMIN_ID in admin_state
+        and message.from_user.id in admin_state
     )
 )
 def admin_steps(message):
-    state = admin_state[ADMIN_ID]
+    state = admin_state[call.from_user.id]
     text = (message.text or "").strip()
 
     if text == "/cancel":
-        admin_state.pop(ADMIN_ID, None)
+        admin_state.pop(message.from_user.id, None)
         bot.send_message(
             message.chat.id,
             "✅ تم إلغاء العملية.",
@@ -772,10 +886,41 @@ def admin_steps(message):
     data = load_data()
     step = state["step"]
 
+    if step == "add_admin":
+        try:
+            new_admin = int(text)
+        except ValueError:
+            bot.send_message(message.chat.id, "أرسل ID رقميًا صحيحًا.")
+            return
+        admins = data.setdefault("admins", [ADMIN_ID])
+        if new_admin not in admins:
+            admins.append(new_admin)
+            save_data(data)
+        admin_state.pop(message.from_user.id, None)
+        bot.send_message(message.chat.id, "✅ تم إضافة الأدمن.", reply_markup=admins_keyboard())
+        return
+
+    if step == "broadcast":
+        sent = 0
+        failed = 0
+        for target in data.get("users", []):
+            try:
+                bot.send_message(target, text)
+                sent += 1
+            except Exception:
+                failed += 1
+        admin_state.pop(message.from_user.id, None)
+        bot.send_message(
+            message.chat.id,
+            f"✅ انتهى الإرسال.\nنجح: {sent}\nفشل: {failed}",
+            reply_markup=admin_main_keyboard()
+        )
+        return
+
     if step == "store_name":
         data["store_name"] = text
         save_data(data)
-        admin_state.pop(ADMIN_ID, None)
+        admin_state.pop(message.from_user.id, None)
         bot.send_message(
             message.chat.id,
             "✅ تم تعديل اسم المتجر.",
@@ -786,7 +931,7 @@ def admin_steps(message):
     if step == "welcome_text":
         data["welcome_text"] = text
         save_data(data)
-        admin_state.pop(ADMIN_ID, None)
+        admin_state.pop(message.from_user.id, None)
         bot.send_message(
             message.chat.id,
             "✅ تم تعديل رسالة الترحيب.",
@@ -797,7 +942,7 @@ def admin_steps(message):
     if step == "contact_text":
         data["contact_text"] = text
         save_data(data)
-        admin_state.pop(ADMIN_ID, None)
+        admin_state.pop(message.from_user.id, None)
         bot.send_message(
             message.chat.id,
             "✅ تم تعديل نص التواصل.",
@@ -808,7 +953,7 @@ def admin_steps(message):
     if step == "about_text":
         data["about_text"] = text
         save_data(data)
-        admin_state.pop(ADMIN_ID, None)
+        admin_state.pop(message.from_user.id, None)
         bot.send_message(
             message.chat.id,
             "✅ تم تعديل نص حول المتجر.",
@@ -825,7 +970,7 @@ def admin_steps(message):
                 break
 
         save_data(data)
-        admin_state.pop(ADMIN_ID, None)
+        admin_state.pop(message.from_user.id, None)
 
         bot.send_message(
             message.chat.id,
@@ -849,7 +994,7 @@ def admin_steps(message):
                 break
 
         save_data(data)
-        admin_state.pop(ADMIN_ID, None)
+        admin_state.pop(message.from_user.id, None)
 
         bot.send_message(
             message.chat.id,
@@ -886,7 +1031,7 @@ def admin_steps(message):
         })
 
         save_data(data)
-        admin_state.pop(ADMIN_ID, None)
+        admin_state.pop(message.from_user.id, None)
 
         bot.send_message(
             message.chat.id,
@@ -926,7 +1071,7 @@ def admin_steps(message):
         else:
             result = "❌ تعذر تعديل الخدمة."
 
-        admin_state.pop(ADMIN_ID, None)
+        admin_state.pop(message.from_user.id, None)
 
         bot.send_message(
             message.chat.id,
@@ -945,16 +1090,17 @@ def setup_commands():
         types.BotCommand("start", "فتح المتجر")
     ])
 
-    try:
-        bot.set_my_commands(
-            [
-                types.BotCommand("start", "فتح المتجر"),
-                types.BotCommand("admin", "لوحة الإدارة")
-            ],
-            scope=types.BotCommandScopeChat(ADMIN_ID)
-        )
-    except Exception as error:
-        print("Could not set admin commands:", error)
+    for admin_id in load_data().get("admins", [ADMIN_ID]):
+        try:
+            bot.set_my_commands(
+                [
+                    types.BotCommand("start", "فتح المتجر"),
+                    types.BotCommand("admin", "لوحة الإدارة")
+                ],
+                scope=types.BotCommandScopeChat(admin_id)
+            )
+        except Exception as error:
+            print("Could not set admin commands:", error)
 
 
 if __name__ == "__main__":
