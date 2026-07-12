@@ -1085,6 +1085,25 @@ def fallback(message):
     bot.send_message(message.chat.id, "أرسل /start لفتح المتجر.")
 
 
+
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.end_headers()
+        self.wfile.write("Python Bot is running".encode("utf-8"))
+
+    def log_message(self, format, *args):
+        return
+
+
+def start_health_server():
+    port = int(os.getenv("PORT", "10000"))
+    server = HTTPServer(("0.0.0.0", port), HealthHandler)
+    print(f"Health server is running on port {port}")
+    server.serve_forever()
+
+
 def setup_commands():
     bot.set_my_commands([
         types.BotCommand("start", "فتح المتجر")
